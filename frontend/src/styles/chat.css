@@ -1,0 +1,132 @@
+/* ================================================================
+   AI 课程咨询助手 — Shared Chat Styles
+   Education Blue · Clean Design
+   ================================================================ */
+
+/* ── Element Plus Global Overrides (Dark) ──────────── */
+
+/* Popover */
+.el-popover.source-detail-popover {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border-default) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-lg) !important;
+  padding: 18px 22px !important;
+  color: var(--text-primary) !important;
+}
+
+.el-popover.source-detail-popover .el-popper__arrow::before {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border-default) !important;
+}
+
+/* Tags */
+.el-tag {
+  font-family: var(--font-body) !important;
+  letter-spacing: 0.02em;
+}
+
+.el-tag--success.el-tag--light {
+  background: rgba(90, 158, 111, 0.1) !important;
+  border-color: rgba(90, 158, 111, 0.25) !important;
+  color: var(--success) !important;
+}
+
+.el-tag--primary.el-tag--light {
+  background: rgba(59, 130, 196, 0.1) !important;
+  border-color: rgba(59, 130, 196, 0.25) !important;
+  color: var(--accent) !important;
+}
+
+.el-tag--info.el-tag--light {
+  background: rgba(90, 138, 174, 0.1) !important;
+  border-color: rgba(90, 138, 174, 0.25) !important;
+  color: var(--info) !important;
+}
+
+.el-tag--danger.el-tag--light {
+  background: rgba(196, 90, 78, 0.1) !important;
+  border-color: rgba(196, 90, 78, 0.25) !important;
+  color: var(--danger) !important;
+}
+
+/* Buttons (text variant) */
+.el-button.is-text {
+  color: var(--text-secondary) !important;
+}
+
+.el-button.is-text:hover {
+  color: var(--text-primary) !important;
+  background: var(--bg-hover) !important;
+}
+
+/* Primary button */
+.el-button--primary {
+  --el-button-bg-color: var(--accent) !important;
+  --el-button-border-color: var(--accent) !important;
+}
+
+.el-button--primary:hover {
+  --el-button-bg-color: #4a94d4 !important;
+  --el-button-border-color: #4a94d4 !important;
+}
+
+/* Message */
+.el-message {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border-default) !important;
+  box-shadow: var(--shadow-md) !important;
+}
+
+.el-message--success {
+  border-color: rgba(90, 158, 111, 0.3) !important;
+}
+
+.el-message--error {
+  border-color: rgba(196, 90, 78, 0.3) !important;
+}
+
+.el-message--warning {
+  border-color: rgba(196, 138, 64, 0.3) !important;
+}
+
+/* MessageBox */
+.el-message-box {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border-default) !important;
+  color: var(--text-primary) !important;
+}
+
+.el-message-box__title {
+  color: var(--text-primary) !important;
+}
+
+.el-message-box__message {
+  color: var(--text-secondary) !important;
+}
+
+/* Input */
+.el-input__wrapper {
+  background: var(--bg-secondary) !important;
+  box-shadow: none !important;
+  border: 1px solid var(--border-default);
+}
+
+.el-input__inner {
+  color: var(--text-primary) !important;
+}
+
+/* Menu */
+.el-menu {
+  background: transparent !important;
+  border-right: none !important;
+}
+
+.el-menu-item {
+  color: var(--text-secondary) !important;
+}
+
+.el-menu-item:hover {
+  background: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+}
