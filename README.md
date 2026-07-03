@@ -1,6 +1,6 @@
 # AI 课程咨询助手
 
-基于 Vue 3 + Element Plus + Python Flask 的智能课程咨询聊天应用，支持流式对话、多会话管理和文件上传。
+基于 Vue 3 + Element Plus + Python Flask 的智能课程咨询聊天应用，支持流式对话、多会话管理、文件上传，以及基于 RAG 的知识库检索增强。
 
 ## 技术栈
 
@@ -12,6 +12,9 @@
 | 后端框架 | Python Flask |
 | LLM | DeepSeek API (OpenAI 兼容) |
 | 数据持久化 | SQLite |
+| 嵌入模型 | BAAI/bge-m3 (1024 维, 中英双语) |
+| 向量数据库 | ChromaDB (via langchain-chroma) |
+| RAG 框架 | LangChain (langchain-core + langchain-text-splitters) |
 
 ## 项目结构
 
@@ -42,12 +45,24 @@ AI-Engineer-Mentor/
 │           └── chat.css             # Element Plus 暗色主题覆盖
 │
 ├── backend/                         # Python Flask 后端
-│   ├── app.py                       # API 入口
-│   ├── config.py                    # 配置管理（.env 加载）
+│   ├── app.py                       # API 入口 + RAG 集成
+│   ├── config.py                    # 配置管理（.env 加载 + RAG 配置）
 │   ├── db.py                        # SQLite 数据库 + CRUD
+│   ├── file_utils.py                # 文件解析（txt/docx/pdf/xlsx/md/html/pptx/ipynb）
 │   ├── llm.py                       # DeepSeek LLM 客户端
 │   ├── prompts.py                   # 系统提示词
-│   └── requirements.txt
+│   ├── requirements.txt
+│   ├── assistant/                   # RAG 流水线
+│   │   ├── embeddings.py            # BGE-M3 嵌入模型（LangChain Embeddings）
+│   │   ├── vectorstore.py           # ChromaDB 向量存储管理器
+│   │   └── prompts.py               # RAG 提示词模板 + 上下文构建
+│   ├── scripts/
+│   │   ├── build_kb.py              # 知识库构建 CLI
+│   │   └── verify_phase2.py         # Phase 2 验证脚本
+│   └── data/
+│       ├── knowledge/               # 知识库源文档（用户自行放置）
+│       ├── chroma/                  # ChromaDB 持久化（gitignore）
+│       └── uploads/                 # 上传文件临时存储（gitignore）
 │
 ├── .env                             # 环境变量（API Key 等）
 ├── .env.example                     # 环境变量模板
@@ -71,7 +86,27 @@ python app.py
 
 后端默认运行在 `http://localhost:5000`。
 
-### 3. 前端启动
+> **注意**：首次启动时 RAG 功能不会触发模型加载。BGE-M3 模型（约 2.2GB）会在第一次聊天请求时懒加载，首次加载约需 30-60 秒。
+
+### 3. 构建知识库（可选，启用 RAG 必需）
+
+```bash
+cd backend
+
+# 将课程文档放入 data/knowledge/ 目录（支持 txt/md/docx/pdf/xlsx/html/pptx/ipynb）
+# 已有示例文件 data/knowledge/sample_course.md 可直接测试
+
+python scripts/build_kb.py
+```
+
+首次运行会自动下载 BGE-M3 模型（约 2.2GB）。如果网络受限，可设置镜像：
+
+```bash
+set HF_ENDPOINT=https://hf-mirror.com
+python scripts/build_kb.py
+```
+
+### 4. 前端启动
 
 ```bash
 cd frontend
@@ -81,7 +116,7 @@ npm run dev
 
 前端默认运行在 `http://localhost:5173`，开发环境下 `/api` 请求自动代理到后端。
 
-### 4. 访问应用
+### 5. 访问应用
 
 浏览器打开 `http://localhost:5173`，输入任意用户名即可登录使用。
 
@@ -108,9 +143,24 @@ npm run dev
 
 ### 文件上传
 
-- 支持格式：`pdf`, `docx`, `txt`, `pptx`, `html`, `ipynb`
+- 支持格式：`pdf`, `docx`, `txt`, `pptx`, `html`, `ipynb`, `xlsx`, `md`
 - 文件大小限制：32MB
-- 前端格式校验 + 后端接收端点
+- 前端格式校验 + 后端解析提取文本内容
+
+### RAG 知识库检索
+
+- **嵌入模型**：BAAI/bge-m3（1024 维，中英双语），首次聊天请求懒加载
+- **文档分块**：RecursiveCharacterTextSplitter（chunk_size=500, overlap=50）
+- **相似度检索**：基于 ChromaDB + cosine similarity，默认阈值 0.45
+- **上下文注入**：检索结果自动注入 System Prompt，AI 回答引用课程资料
+- **优雅降级**：知识库为空时自动切换为普通对话模式，不影响正常聊天
+- **前端来源展示**：回答附带引用来源面板（文件名 + 相关度评分）
+
+### 知识库管理
+
+- CLI 构建脚本：`python scripts/build_kb.py`
+- 支持 8 种文档格式自动解析
+- 构建进度显示 + 来源分布统计
 
 ### 登录认证
 
@@ -124,7 +174,7 @@ npm run dev
 |--------|------|------|
 | `POST` | `/api/login` | 登录 `{username}` → `{username, token}` |
 | `POST` | `/api/logout` | 登出 |
-| `GET` | `/api/health` | 健康检查 |
+| `GET` | `/api/health` | 健康检查（含 `rag_available`, `knowledge_base_docs`） |
 | `GET` | `/api/sessions` | 获取会话列表（含 `time_group`） |
 | `POST` | `/api/sessions` | 创建新会话 `{title}` |
 | `PATCH` | `/api/sessions/<id>` | 重命名会话 `{title}` |
@@ -135,11 +185,16 @@ npm run dev
 
 ### SSE 事件格式
 
+RAG 启用时，`sources` 事件在所有 `token` 事件之前发送：
+
 ```
+data: {"type":"sources","data":[{"content":"课程内容预览...","source":"sample_course.md","score":0.731}]}
 data: {"type":"token","data":"你好"}
 data: {"type":"token","data":"！"}
 data: {"type":"done"}
 ```
+
+知识库为空或无匹配时，`sources` 事件返回空数组 `[]`。
 
 ## 配置说明
 
@@ -157,6 +212,17 @@ FLASK_PORT=5000
 
 # Database
 DB_PATH=./backend/data/mentor.db
+
+# RAG
+RAG_ENABLED=true                      # 是否启用知识库检索
+CHROMA_DIR=./backend/data/chroma      # ChromaDB 持久化目录
+KNOWLEDGE_DIR=./backend/data/knowledge # 知识库源文档目录
+EMBEDDING_MODEL=BAAI/bge-m3           # 嵌入模型
+EMBEDDING_DEVICE=auto                 # 推理设备（auto/cpu/cuda）
+RETRIEVAL_TOP_K=5                     # 检索返回数量
+RETRIEVAL_SCORE_THRESHOLD=0.45        # 相似度阈值
+CHUNK_SIZE=500                        # 文档分块大小
+CHUNK_OVERLAP=50                      # 分块重叠大小
 ```
 
 ## 构建部署
