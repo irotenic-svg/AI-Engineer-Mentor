@@ -406,4 +406,5 @@ if __name__ == "__main__":
         host=settings.flask_host,
         port=settings.flask_port,
         debug=settings.flask_env == "development",
+        use_reloader=False,  # watchdog 误报 transformers 库文件变更导致无限重载
     )
