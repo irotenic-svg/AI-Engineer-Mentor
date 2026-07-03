@@ -40,6 +40,47 @@ def get_llm():
     return _llm_client
 
 
+# ── RAG 初始化（延迟加载） ──
+_rag_embedder = None
+_rag_vectorstore = None
+_rag_ready = None  # None = 未初始化, True/False = 已检查
+
+
+def _init_rag():
+    """懒加载 RAG 流水线。返回 Retriever 或 None（知识库为空/禁用/失败）"""
+    global _rag_embedder, _rag_vectorstore, _rag_ready
+    if _rag_ready is not None:
+        return _rag_vectorstore  # 已初始化，直接返回（None 表示不可用）
+
+    if not settings.rag_enabled:
+        print("[Init] RAG 已禁用 (RAG_ENABLED=false)")
+        _rag_ready = False
+        return None
+
+    try:
+        from assistant.embeddings import get_embedder
+        from assistant.vectorstore import VectorStoreManager
+
+        _rag_embedder = get_embedder(settings.embedding_model, settings.embedding_device)
+        _rag_vectorstore = VectorStoreManager(
+            settings.chroma_absolute_dir, _rag_embedder, "course_knowledge"
+        )
+        count = _rag_vectorstore.count()
+        if count > 0:
+            print(f"[Init] RAG ready. 知识库: {count} 个文档块")
+            _rag_ready = True
+            return _rag_vectorstore
+        else:
+            print("[Init] RAG 已启用但知识库为空。运行 scripts/build_kb.py 构建。")
+            _rag_ready = False
+            _rag_vectorstore = None
+            return None
+    except Exception as e:
+        print(f"[Init] RAG 初始化失败（非致命）: {e}")
+        _rag_ready = False
+        return None
+
+
 # ── 辅助函数 ────────────────────────────────────────
 
 
@@ -53,8 +94,20 @@ def _get_username():
 
 @app.route("/api/health", methods=["GET"])
 def health_check():
-    """健康检查"""
-    return jsonify({"status": "ok"})
+    """健康检查（含 RAG 状态，不触发模型加载）"""
+    kb_count = 0
+    rag_available = False
+    if settings.rag_enabled and _rag_ready is True and _rag_vectorstore:
+        try:
+            kb_count = _rag_vectorstore.count()
+            rag_available = True
+        except Exception:
+            pass
+    return jsonify({
+        "status": "ok",
+        "rag_available": rag_available,
+        "knowledge_base_docs": kb_count,
+    })
 
 
 # ── Auth ────────────────────────────────────────────
@@ -186,15 +239,40 @@ def chat_stream():
 
         try:
             llm = get_llm()
-            from prompts import SYSTEM_PROMPT
 
-            # 获取历史消息作为上下文
+            # ── RAG 检索 ──
+            vs = _init_rag()
+            sources = []
+            context_str = ""
+
+            if vs is not None:
+                try:
+                    from assistant.prompts import format_context, format_sources
+
+                    results = vs.similarity_search_with_relevance_scores(
+                        question, k=settings.retrieval_top_k
+                    )
+                    # 按阈值过滤
+                    filtered = [
+                        (doc, score)
+                        for doc, score in results
+                        if score >= settings.retrieval_score_threshold
+                    ]
+                    if filtered:
+                        sources = format_sources(filtered)
+                        context_str = format_context(filtered)
+                except Exception as rag_err:
+                    print(f"[RAG] 检索失败: {rag_err}")
+
+            yield f"data: {json.dumps({'type': 'sources', 'data': sources}, ensure_ascii=False)}\n\n"
+
+            # ── 构建消息 ──
+            from assistant.prompts import build_messages_with_context
+
             history = fetch_messages(conn, session_id)
-            messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-            for msg in history[-20:]:  # 最近 20 条
-                messages.append({"role": msg["role"], "content": msg["content"]})
+            messages = build_messages_with_context(context_str, history, question)
 
-            # 流式调用 LLM
+            # ── 流式调用 LLM ──
             stream = llm.chat.completions.create(
                 model=settings.llm_model,
                 messages=messages,
@@ -211,7 +289,10 @@ def chat_stream():
 
             # 保存 AI 回答
             if full_answer:
-                add_message(conn, session_id, "assistant", full_answer)
+                try:
+                    add_message(conn, session_id, "assistant", full_answer)
+                except Exception:
+                    pass  # session 可能不存在
 
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
 
@@ -254,7 +335,7 @@ def upload_file():
         return jsonify({"error": "文件大小不能超过 32M"}), 400
 
     # 校验文件格式
-    allowed_exts = {"pdf", "docx", "txt", "pptx", "html", "ipynb"}
+    allowed_exts = {"pdf", "docx", "txt", "pptx", "html", "ipynb", "xlsx", "md"}
     ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
     if ext not in allowed_exts:
         return jsonify({

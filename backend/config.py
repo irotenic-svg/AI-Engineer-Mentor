@@ -48,6 +48,39 @@ class Settings:
         )
     )
 
+    # ── RAG ──
+    rag_enabled: bool = field(
+        default_factory=lambda: os.getenv("RAG_ENABLED", "true").lower() == "true"
+    )
+    chroma_dir: str = field(
+        default_factory=lambda: os.getenv("CHROMA_DIR", "./backend/data/chroma")
+    )
+    knowledge_dir: str = field(
+        default_factory=lambda: os.getenv("KNOWLEDGE_DIR", "./backend/data/knowledge")
+    )
+    embedding_model: str = field(
+        default_factory=lambda: os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
+    )
+    embedding_device: str = field(
+        default_factory=lambda: os.getenv("EMBEDDING_DEVICE", "auto")
+    )
+
+    # ── Retrieval ──
+    retrieval_top_k: int = field(
+        default_factory=lambda: int(os.getenv("RETRIEVAL_TOP_K", "5"))
+    )
+    retrieval_score_threshold: float = field(
+        default_factory=lambda: float(os.getenv("RETRIEVAL_SCORE_THRESHOLD", "0.45"))
+    )
+
+    # ── Chunking ──
+    chunk_size: int = field(
+        default_factory=lambda: int(os.getenv("CHUNK_SIZE", "500"))
+    )
+    chunk_overlap: int = field(
+        default_factory=lambda: int(os.getenv("CHUNK_OVERLAP", "50"))
+    )
+
     @property
     def llm_api_key(self) -> str:
         return self.deepseek_api_key
@@ -59,6 +92,20 @@ class Settings:
     @property
     def llm_model(self) -> str:
         return self.deepseek_model
+
+    @property
+    def chroma_absolute_dir(self) -> str:
+        p = Path(self.chroma_dir)
+        if not p.is_absolute():
+            p = (_PROJECT_ROOT / p).resolve()
+        return str(p)
+
+    @property
+    def knowledge_absolute_dir(self) -> str:
+        p = Path(self.knowledge_dir)
+        if not p.is_absolute():
+            p = (_PROJECT_ROOT / p).resolve()
+        return str(p)
 
 
 def load_settings() -> Settings:

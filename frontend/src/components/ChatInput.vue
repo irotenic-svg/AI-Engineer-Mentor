@@ -89,8 +89,8 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'send', 'file-upload', 'remove-file'])
 const taRef = ref(null)
 
-const acceptTypes = '.pdf,.docx,.txt,.pptx,.html,.ipynb'
-const allowedExts = ['pdf', 'docx', 'txt', 'pptx', 'html', 'ipynb']
+const acceptTypes = '.pdf,.docx,.txt,.pptx,.html,.ipynb,.xlsx,.md'
+const allowedExts = ['pdf', 'docx', 'txt', 'pptx', 'html', 'ipynb', 'xlsx', 'md']
 const maxSize = 32 * 1024 * 1024 // 32MB
 
 const hasContent = computed(() => props.modelValue?.trim() || props.files.length > 0)

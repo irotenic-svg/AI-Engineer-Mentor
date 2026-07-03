@@ -252,6 +252,15 @@ async function handleSend() {
   try {
     for await (const event of sendMessageStream(fullContent, sid)) {
       switch (event.type) {
+        case 'sources':
+          if (event.data && event.data.length > 0 && messages.value[aiIdx]) {
+            messages.value[aiIdx] = {
+              ...messages.value[aiIdx],
+              sources: event.data,
+            }
+          }
+          break
+
         case 'thinking':
           thinking.value = true
           scheduleRender()

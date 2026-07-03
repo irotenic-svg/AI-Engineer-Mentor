@@ -22,6 +22,8 @@ def extract_text(file_path: str, filename: str) -> str:
             return _read_txt(file_path)
         elif ext == "html":
             return _read_txt(file_path)
+        elif ext == "md":
+            return _read_txt(file_path)
         elif ext == "ipynb":
             return _read_ipynb(file_path)
         elif ext == "pdf":
@@ -30,6 +32,8 @@ def extract_text(file_path: str, filename: str) -> str:
             return _read_docx(file_path)
         elif ext == "pptx":
             return _read_pptx(file_path)
+        elif ext == "xlsx":
+            return _read_xlsx(file_path)
         else:
             return f"[不支持的文件格式: .{ext}]"
     except Exception as e:
@@ -150,3 +154,34 @@ def _read_pptx(path: str) -> str:
     if len(content) > MAX_EXTRACT_CHARS:
         content = content[:MAX_EXTRACT_CHARS] + "\n\n[... 内容已截断 ...]"
     return content or "[演示文稿中未提取到可读文本]"
+
+
+def _read_xlsx(path: str) -> str:
+    """提取 Excel 表格文本（按工作表 + 制表符分隔行）"""
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        return "[错误: 未安装 openpyxl 库，无法读取 xlsx 文件]"
+
+    wb = load_workbook(path, data_only=True, read_only=True)
+    parts = []
+    total = 0
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        lines = [f"--- 工作表: {sheet_name} ---"]
+        for row in ws.iter_rows(values_only=True):
+            row_text = "\t".join(str(cell) if cell is not None else "" for cell in row)
+            if row_text.strip():
+                lines.append(row_text)
+                total += len(row_text)
+                if total > MAX_EXTRACT_CHARS:
+                    break
+        parts.append("\n".join(lines))
+        if total > MAX_EXTRACT_CHARS:
+            break
+    wb.close()
+
+    content = "\n\n".join(parts)
+    if len(content) > MAX_EXTRACT_CHARS:
+        content = content[:MAX_EXTRACT_CHARS] + "\n\n[... 内容已截断 ...]"
+    return content or "[Excel 文件中未提取到可读数据]"
