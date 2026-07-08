@@ -81,6 +81,22 @@ class Settings:
         default_factory=lambda: int(os.getenv("CHUNK_OVERLAP", "50"))
     )
 
+    # ── Tavily Web Search ──
+    tavily_api_key: str = field(
+        default_factory=lambda: os.getenv("TAVILY_API_KEY", "")
+    )
+    web_search_enabled: bool = field(
+        default_factory=lambda: os.getenv("WEB_SEARCH_ENABLED", "true").lower() == "true"
+    )
+    web_search_max_results: int = field(
+        default_factory=lambda: int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5"))
+    )
+
+    # ── Intent Recognition ──
+    intent_enabled: bool = field(
+        default_factory=lambda: os.getenv("INTENT_ENABLED", "true").lower() == "true"
+    )
+
     @property
     def llm_api_key(self) -> str:
         return self.deepseek_api_key

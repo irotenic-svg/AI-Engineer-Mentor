@@ -15,3 +15,6 @@ langchain-text-splitters>=0.3.0
 
 # File parsing
 openpyxl>=3.1.0
+
+# Web Search
+tavily-python>=0.5.0

@@ -15,6 +15,8 @@
 | 嵌入模型 | BAAI/bge-m3 (1024 维, 中英双语) |
 | 向量数据库 | ChromaDB (via langchain-chroma) |
 | RAG 框架 | LangChain (langchain-core + langchain-text-splitters) |
+| 网络搜索 | Tavily Search API |
+| 意图识别 | LLM Function Calling (DeepSeek) + 关键词 Fallback |
 
 ## 项目结构
 
@@ -52,13 +54,16 @@ AI-Engineer-Mentor/
 │   ├── llm.py                       # DeepSeek LLM 客户端
 │   ├── prompts.py                   # 系统提示词
 │   ├── requirements.txt
-│   ├── assistant/                   # RAG 流水线
+│   ├── assistant/                   # 智能助手模块
 │   │   ├── embeddings.py            # BGE-M3 嵌入模型（LangChain Embeddings）
 │   │   ├── vectorstore.py           # ChromaDB 向量存储管理器
-│   │   └── prompts.py               # RAG 提示词模板 + 上下文构建
+│   │   ├── prompts.py               # RAG + Web Search 提示词模板
+│   │   ├── intents.py               # 意图识别（LLM function calling + 关键词 fallback）
+│   │   └── websearch.py             # Tavily 网络搜索管理器
 │   ├── scripts/
 │   │   ├── build_kb.py              # 知识库构建 CLI
-│   │   └── verify_phase2.py         # Phase 2 验证脚本
+│   │   ├── verify_phase2.py         # Phase 2 验证脚本
+│   │   └── eval_intents.py          # 意图分类准确率评估（100 条测试集）
 │   └── data/
 │       ├── knowledge/               # 知识库源文档（用户自行放置）
 │       ├── chroma/                  # ChromaDB 持久化（gitignore）
@@ -156,6 +161,21 @@ npm run dev
 - **优雅降级**：知识库为空时自动切换为普通对话模式，不影响正常聊天
 - **前端来源展示**：回答附带引用来源面板（文件名 + 相关度评分）
 
+### 意图识别
+
+- **三级分类**：RAG 课程检索 / 网络搜索 / 直接对话，LLM function calling 主路径 + 关键词 fallback 兜底
+- **准确率**：98%（100 条标注测试集，`python scripts/eval_intents.py`）
+- **前端可视化**：消息气泡显示当前使用的工具标签（📚 课程资料 / 🌐 网络搜索）
+- **性能**：分类延迟 ~0.5-1s（DeepSeek v4-flash），失败时自动降级为关键词匹配
+
+### 网络搜索
+
+- **实时搜索**：基于 Tavily Search API，`advanced` 深度搜索
+- **结果过滤**：相关度 >= 0.5 阈值过滤，最多返回 5 条
+- **上下文注入**：搜索结果格式化后注入 System Prompt，AI 回答标注来源 URL
+- **优雅降级**：API key 未配置或超时时，自动回退为直接对话
+- **前端展示**：网页来源可点击跳转，显示相关度评分
+
 ### 知识库管理
 
 - CLI 构建脚本：`python scripts/build_kb.py`
@@ -174,7 +194,7 @@ npm run dev
 |--------|------|------|
 | `POST` | `/api/login` | 登录 `{username}` → `{username, token}` |
 | `POST` | `/api/logout` | 登出 |
-| `GET` | `/api/health` | 健康检查（含 `rag_available`, `knowledge_base_docs`） |
+| `GET` | `/api/health` | 健康检查（含 RAG/Web Search/Intent 状态） |
 | `GET` | `/api/sessions` | 获取会话列表（含 `time_group`） |
 | `POST` | `/api/sessions` | 创建新会话 `{title}` |
 | `PATCH` | `/api/sessions/<id>` | 重命名会话 `{title}` |
@@ -185,16 +205,26 @@ npm run dev
 
 ### SSE 事件格式
 
-RAG 启用时，`sources` 事件在所有 `token` 事件之前发送：
+完整事件序列（Phase 3 新增 `intent`、`web_search`、`thinking` 事件）：
 
 ```
-data: {"type":"sources","data":[{"content":"课程内容预览...","source":"sample_course.md","score":0.731}]}
+data: {"type":"intent","data":{"code":1,"source":"llm"}}
+data: {"type":"web_search","data":{"status":"ok","result_count":5}}    # 仅 Web Search 意图
+data: {"type":"sources","data":[{"content":"...","source":"sample_course.md","score":0.731}]}
+data: {"type":"thinking"}
 data: {"type":"token","data":"你好"}
 data: {"type":"token","data":"！"}
 data: {"type":"done"}
 ```
 
-知识库为空或无匹配时，`sources` 事件返回空数组 `[]`。
+| 事件 | 说明 |
+|------|------|
+| `intent` | 意图分类结果：`code`=0/1/2 (CHAT/RAG/WEB_SEARCH)，`source`=llm/keyword |
+| `web_search` | 网络搜索状态（仅 Web Search 意图时发送） |
+| `sources` | 检索/搜索来源列表，空数组 `[]` 表示无工具或未匹配 |
+| `thinking` | LLM 开始生成，前端显示"思考中…" |
+| `token` | 流式输出 token |
+| `done` | 生成完成 |
 
 ## 配置说明
 
@@ -223,6 +253,14 @@ RETRIEVAL_TOP_K=5                     # 检索返回数量
 RETRIEVAL_SCORE_THRESHOLD=0.45        # 相似度阈值
 CHUNK_SIZE=500                        # 文档分块大小
 CHUNK_OVERLAP=50                      # 分块重叠大小
+
+# Tavily Web Search
+TAVILY_API_KEY=tvly-xxx               # Tavily API 密钥 (https://tavily.com)
+WEB_SEARCH_ENABLED=true               # 是否启用网络搜索
+WEB_SEARCH_MAX_RESULTS=5              # 搜索结果数量
+
+# Intent Recognition
+INTENT_ENABLED=true                   # 是否启用意图识别
 ```
 
 ## 构建部署

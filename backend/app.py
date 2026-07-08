@@ -81,6 +81,45 @@ def _init_rag():
         return None
 
 
+# ── Web Search 初始化（延迟加载） ──
+_web_search_manager = None
+_web_search_ready = None
+
+
+def _init_web_search():
+    """懒加载 WebSearchManager。返回实例或 None（禁用/未配置/失败）"""
+    global _web_search_manager, _web_search_ready
+    if _web_search_ready is not None:
+        return _web_search_manager
+
+    if not settings.web_search_enabled:
+        print("[Init] Web Search 已禁用 (WEB_SEARCH_ENABLED=false)")
+        _web_search_ready = False
+        return None
+
+    if not settings.tavily_api_key:
+        print("[Init] Web Search TAVILY_API_KEY 未配置，已禁用")
+        _web_search_ready = False
+        return None
+
+    try:
+        from assistant.websearch import WebSearchManager
+        _web_search_manager = WebSearchManager(
+            api_key=settings.tavily_api_key,
+            enabled=settings.web_search_enabled,
+        )
+        if _web_search_manager.enabled:
+            print("[Init] Web Search ready (Tavily)")
+            _web_search_ready = True
+            return _web_search_manager
+        _web_search_ready = False
+        return None
+    except Exception as e:
+        print(f"[Init] Web Search 初始化失败（非致命）: {e}")
+        _web_search_ready = False
+        return None
+
+
 # ── 辅助函数 ────────────────────────────────────────
 
 
@@ -103,10 +142,17 @@ def health_check():
             rag_available = True
         except Exception:
             pass
+    # Web Search 状态
+    web_search_available = False
+    if settings.web_search_enabled and settings.tavily_api_key:
+        web_search_available = True
+
     return jsonify({
         "status": "ok",
         "rag_available": rag_available,
         "knowledge_base_docs": kb_count,
+        "web_search_available": web_search_available,
+        "intent_enabled": settings.intent_enabled,
     })
 
 
@@ -234,45 +280,99 @@ def chat_stream():
         pass  # session 可能还不存在
 
     def generate():
-        """SSE 事件生成器"""
+        """SSE 事件生成器 — 意图识别 → 工具路由 → 上下文 → LLM 流式"""
         full_answer = ""
+        intent_code = None
+        intent_source = None
 
         try:
             llm = get_llm()
 
-            # ── RAG 检索 ──
-            vs = _init_rag()
+            # ── Step 1: 意图识别 ──
+            from assistant.intents import detect_intent, IntentCode
+
+            if settings.intent_enabled:
+                try:
+                    intent_code, intent_source = detect_intent(
+                        llm=llm,
+                        query=question,
+                        model=settings.llm_model,
+                        enabled=settings.intent_enabled,
+                    )
+                except Exception as ie:
+                    print(f"[Intent] 分类异常: {ie}")
+                    intent_code = IntentCode.CHAT
+                    intent_source = "error"
+            else:
+                intent_code = IntentCode.CHAT
+                intent_source = "disabled"
+
+            # 发送 intent 事件给前端
+            yield f"data: {json.dumps({'type': 'intent', 'data': {'code': int(intent_code), 'source': intent_source}}, ensure_ascii=False)}\n\n"
+
+            # ── Step 2: 工具路由 ──
             sources = []
             context_str = ""
 
-            if vs is not None:
-                try:
-                    from assistant.prompts import format_context, format_sources
+            if intent_code == IntentCode.RAG:
+                # ── RAG 检索 ──
+                vs = _init_rag()
+                if vs is not None:
+                    try:
+                        from assistant.prompts import format_context, format_sources
 
-                    results = vs.similarity_search_with_relevance_scores(
-                        question, k=settings.retrieval_top_k
-                    )
-                    # 按阈值过滤
-                    filtered = [
-                        (doc, score)
-                        for doc, score in results
-                        if score >= settings.retrieval_score_threshold
-                    ]
-                    if filtered:
-                        sources = format_sources(filtered)
-                        context_str = format_context(filtered)
-                except Exception as rag_err:
-                    print(f"[RAG] 检索失败: {rag_err}")
+                        results = vs.similarity_search_with_relevance_scores(
+                            question, k=settings.retrieval_top_k
+                        )
+                        filtered = [
+                            (doc, score)
+                            for doc, score in results
+                            if score >= settings.retrieval_score_threshold
+                        ]
+                        if filtered:
+                            sources = format_sources(filtered)
+                            context_str = format_context(filtered)
+                    except Exception as rag_err:
+                        print(f"[RAG] 检索失败: {rag_err}")
 
+            elif intent_code == IntentCode.WEB_SEARCH:
+                # ── Web Search ──
+                ws = _init_web_search()
+                if ws is not None and ws.enabled:
+                    try:
+                        from assistant.websearch import format_web_context
+
+                        result = ws.search(
+                            query=question,
+                            max_results=settings.web_search_max_results,
+                            search_depth="advanced",
+                        )
+                        if result["error"]:
+                            yield f"data: {json.dumps({'type': 'web_search', 'data': {'status': 'error', 'message': result['error']}}, ensure_ascii=False)}\n\n"
+                        else:
+                            sources = ws.format_sources(result["results"])
+                            context_str = format_web_context(result["results"])
+                            yield f"data: {json.dumps({'type': 'web_search', 'data': {'status': 'ok', 'result_count': len(result['results'])}}, ensure_ascii=False)}\n\n"
+                    except Exception as ws_err:
+                        print(f"[WebSearch] 搜索失败: {ws_err}")
+                        yield f"data: {json.dumps({'type': 'web_search', 'data': {'status': 'error', 'message': str(ws_err)}}, ensure_ascii=False)}\n\n"
+
+            # else IntentCode.CHAT: 不使用任何工具
+
+            # ── Step 3: 发送统一 sources 事件 ──
             yield f"data: {json.dumps({'type': 'sources', 'data': sources}, ensure_ascii=False)}\n\n"
 
-            # ── 构建消息 ──
+            # ── Step 4: 构建消息（意图感知）──
             from assistant.prompts import build_messages_with_context
 
             history = fetch_messages(conn, session_id)
-            messages = build_messages_with_context(context_str, history, question)
+            messages = build_messages_with_context(
+                context_str, history, question, int(intent_code) if intent_code else 0
+            )
 
-            # ── 流式调用 LLM ──
+            # ── Step 5: 发送 thinking 事件 + LLM 流式 ──
+            yield f"data: {json.dumps({'type': 'thinking'}, ensure_ascii=False)}\n\n"
+
             stream = llm.chat.completions.create(
                 model=settings.llm_model,
                 messages=messages,

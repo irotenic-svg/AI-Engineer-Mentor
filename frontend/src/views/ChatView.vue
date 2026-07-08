@@ -18,7 +18,23 @@
         >
           <div v-if="msg.role === 'assistant'" class="message-avatar">📚</div>
           <div class="message-content">
+            <!-- Tool badge -->
+            <div v-if="msg.intent && msg.intent.code !== 0" class="msg-tool-badge">
+              <span v-if="msg.intent.code === 1" class="tool-tag rag">📚 课程资料</span>
+              <span v-else-if="msg.intent.code === 2" class="tool-tag web">🌐 网络搜索</span>
+            </div>
             <div class="message-bubble" v-html="renderMarkdown(msg.content)"></div>
+            <!-- Sources panel -->
+            <div v-if="msg.sources && msg.sources.length > 0" class="msg-sources">
+              <div class="sources-title">📖 引用来源 ({{ msg.sources.length }})</div>
+              <div v-for="(src, si) in msg.sources" :key="si" class="source-item">
+                <span v-if="isWebSource(src.source)" class="source-type web">🔗</span>
+                <span v-else class="source-type rag">📄</span>
+                <a v-if="isWebSource(src.source)" :href="src.source" target="_blank" rel="noopener" class="source-link">{{ src.title || src.source }}</a>
+                <span v-else class="source-filename">{{ src.source }}</span>
+                <span class="source-score">{{ (src.score * 100).toFixed(0) }}%</span>
+              </div>
+            </div>
             <!-- Show attached files on user messages -->
             <div v-if="msg.files && msg.files.length > 0" class="msg-files">
               <div v-for="(f, fi) in msg.files" :key="fi" class="msg-file-tag">
@@ -85,6 +101,10 @@ const suggestions = [
 ]
 
 // ── Helpers ──────────────────────────────────────
+
+function isWebSource(source) {
+  return source && (source.startsWith('http://') || source.startsWith('https://'))
+}
 
 function cleanDisplayContent(content) {
   // 移除嵌入的文件内容块，只保留文件名标记
@@ -259,6 +279,19 @@ async function handleSend() {
               sources: event.data,
             }
           }
+          break
+
+        case 'intent':
+          if (event.data && messages.value[aiIdx]) {
+            messages.value[aiIdx] = {
+              ...messages.value[aiIdx],
+              intent: event.data,
+            }
+          }
+          break
+
+        case 'web_search':
+          // Web search status notification — could show "searching web..." indicator
           break
 
         case 'thinking':
