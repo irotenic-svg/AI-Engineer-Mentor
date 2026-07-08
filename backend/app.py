@@ -378,7 +378,7 @@ def chat_stream():
                 messages=messages,
                 stream=True,
                 temperature=0.7,
-                max_tokens=2048,
+                max_tokens=4096,
             )
 
             for chunk in stream:
