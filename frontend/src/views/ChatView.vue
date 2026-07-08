@@ -79,6 +79,9 @@ import WelcomeState from '@/components/WelcomeState.vue'
 import ChatInput from '@/components/ChatInput.vue'
 import { sendMessageStream, uploadFile } from '@/api/chat'
 import { getSessionMessages, createSession } from '@/api/session'
+import { marked } from 'marked'
+import hljs from 'highlight.js'
+import 'highlight.js/styles/github-dark.css'
 
 const activeSessionId = inject('activeSessionId')
 const refreshSessions = inject('refreshSessions')
@@ -122,45 +125,34 @@ function scrollToBottom() {
   })
 }
 
+// ── Markdown renderer (marked + highlight.js) ──
+
+marked.setOptions({
+  highlight: function (code, lang) {
+    if (lang && hljs.getLanguage(lang)) {
+      try {
+        return hljs.highlight(code, { language: lang }).value
+      } catch (_) { /* fall through */ }
+    }
+    try {
+      return hljs.highlightAuto(code).value
+    } catch (_) { /* fall through */ }
+    return code
+  },
+  breaks: true,
+  gfm: true,
+})
+
 function renderMarkdown(text) {
   if (!text) return ''
-
-  let html = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-
-  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) =>
-    `<pre><code>${code.trim()}</code></pre>`
-  )
-
-  html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>')
-
-  html = html.replace(/`(.+?)`/g, '<code>$1</code>')
-
-  html = html.replace(/^### (.+)$/gm, '<h4>$1</h4>')
-  html = html.replace(/^## (.+)$/gm, '<h3>$1</h3>')
-  html = html.replace(/^# (.+)$/gm, '<h2>$1</h2>')
-
-  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>')
-
-  html = html.replace(/^[-*] (.+)$/gm, '<li>$1</li>')
-  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>')
-
-  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
-
-  html = html.replace(/^---$/gm, '<hr>')
-
-  html = html.replace(/\n\n+/g, '</p><p>')
-  html = html.replace(/\n/g, '<br>')
-
-  html = html.replace(/<p>\s*<\/p>/g, '')
-  html = html.replace(/<p>(<[ou]l>)/g, '$1')
-  html = html.replace(/(<\/[ou]l>)<\/p>/g, '$1')
-
-  return `<p>${html}</p>`
+  try {
+    return marked.parse(text)
+  } catch (_) {
+    // 流式输出时 markdown 可能不完整，降级为纯文本
+    let safe = text
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    return `<p>${safe.replace(/\n/g, '<br>')}</p>`
+  }
 }
 
 // ── Session helper ───────────────────────────────
@@ -581,9 +573,18 @@ watch(activeSessionId, async (newId) => {
 .message-bubble pre code {
   background: transparent;
   border: none;
-  color: #c8c0b4;
   padding: 0;
   font-size: 13px;
+}
+
+/* Plain code blocks (no language / no highlighting) keep uniform color */
+.message-bubble pre code:not([class]) {
+  color: #c8c0b4;
+}
+
+/* Let highlight.js manage colors for highlighted code */
+.message-bubble pre code.hljs {
+  color: inherit;
 }
 
 .message-bubble ul, .message-bubble ol {
@@ -607,6 +608,57 @@ watch(activeSessionId, async (newId) => {
   border: none;
   border-top: 1px solid var(--border-subtle);
   margin: 14px 0;
+}
+
+/* Tables */
+.message-bubble table {
+  width: 100%;
+  max-width: 100%;
+  margin: 12px 0;
+  border-collapse: collapse;
+  font-size: 13px;
+  overflow-x: auto;
+  display: block;
+}
+
+.message-bubble thead {
+  border-bottom: 2px solid var(--border-default);
+}
+
+.message-bubble th {
+  padding: 8px 14px;
+  text-align: left;
+  font-weight: 650;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.message-bubble td {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+}
+
+.message-bubble tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Code block language label */
+.message-bubble pre {
+  position: relative;
+}
+
+.message-bubble pre[class]::before {
+  content: attr(class);
+  position: absolute;
+  top: 0;
+  right: 12px;
+  padding: 2px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 0 0 4px 4px;
+  text-transform: uppercase;
 }
 
 /* ── Input Footer ──────────────────────────────────── */
