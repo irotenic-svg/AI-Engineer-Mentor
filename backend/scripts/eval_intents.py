@@ -56,39 +56,30 @@ TEST_CASES = [
     {"query": "数据分析需要用到哪些工具？", "expected": 1},
     {"query": "学完有推荐就业吗？", "expected": 1},
 
-    # ===== Web Search (网络搜索) — 30 条 =====
+    # ===== Web Search (网络搜索) — 21 条 =====
     {"query": "2025年AI行业最新趋势是什么？", "expected": 2},
-    {"query": "React和Vue哪个好？", "expected": 2},
     {"query": "DeepSeek最新版本有什么新功能？", "expected": 2},
     {"query": "今天天气怎么样？", "expected": 2},
-    {"query": "Python和Java哪个更适合新手？", "expected": 2},
     {"query": "最近有什么AI新闻？", "expected": 2},
     {"query": "当前数据分析师的薪资水平如何？", "expected": 2},
     {"query": "2024年最火的编程语言排名", "expected": 2},
     {"query": "最新的GPT模型有什么能力？", "expected": 2},
-    {"query": "Vue 3和Vue 2的主要区别", "expected": 2},
-    {"query": "现在学Python好还是Go好？", "expected": 2},
     {"query": "目前市场上AI工程师的需求量大吗？", "expected": 2},
-    {"query": "Claude和ChatGPT对比", "expected": 2},
     {"query": "今年前端开发的技术趋势", "expected": 2},
     {"query": "哪些公司在招聘AI工程师？", "expected": 2},
     {"query": "最新的Python版本有什么更新？", "expected": 2},
-    {"query": "现在大数据技术发展到什么阶段了？", "expected": 2},
     {"query": "2026年IT行业就业前景", "expected": 2},
     {"query": "Rust语言值得学吗？最新发展怎么样？", "expected": 2},
-    {"query": "有哪些好用的AI编程工具？", "expected": 2},
     {"query": "最近有没有重要的技术大会？", "expected": 2},
-    {"query": "Flutter和React Native怎么选？", "expected": 2},
-    {"query": "当前WebAssembly的发展状况", "expected": 2},
+    {"query": "当前WebAssembly的发展状况", "expected": 0},  # 边界：技术发展概况，不需精确数据
     {"query": "人工智能行业的最新政策法规", "expected": 2},
-    {"query": "有哪些免费的AI课程推荐？", "expected": 2},
     {"query": "现在区块链技术还火吗？", "expected": 2},
     {"query": "edge computing最新进展", "expected": 2},
     {"query": "TypeScript和JavaScript发展趋势对比", "expected": 2},
     {"query": "GitHub上最近热门的开源项目", "expected": 2},
     {"query": "2025年最佳的编程学习路线", "expected": 2},
 
-    # ===== Chat (直接对话) — 25 条 =====
+    # ===== Chat (直接对话) — 36 条 =====
     {"query": "你好", "expected": 0},
     {"query": "谢谢你的帮助", "expected": 0},
     {"query": "什么是Python？", "expected": 0},
@@ -114,6 +105,18 @@ TEST_CASES = [
     {"query": "git常用命令有哪些", "expected": 0},
     {"query": "如何调试Python代码", "expected": 0},
     {"query": "写代码时如何保持专注", "expected": 0},
+    # 基础技术对比（从 Web Search 迁移 — 不需要实时数据）
+    {"query": "React和Vue哪个好？", "expected": 0},
+    {"query": "Python和Java哪个更适合新手？", "expected": 0},
+    {"query": "Vue 3和Vue 2的主要区别", "expected": 0},
+    {"query": "现在学Python好还是Go好？", "expected": 0},
+    {"query": "Claude和ChatGPT对比", "expected": 0},
+    {"query": "Flutter和React Native怎么选？", "expected": 0},
+    {"query": "有哪些好用的AI编程工具？", "expected": 0},
+    {"query": "有哪些免费的AI课程推荐？", "expected": 0},
+    {"query": "现在大数据技术发展到什么阶段了？", "expected": 0},
+    {"query": "对比一下React和Vue", "expected": 0},
+    {"query": "Django和Flask的架构区别", "expected": 0},
 
     # ===== 边界 Case — 10 条 =====
     {"query": "Python怎么样？", "expected": 1},            # 偏向课程咨询语境
@@ -121,7 +124,7 @@ TEST_CASES = [
     {"query": "学完Python能找到工作吗？最近市场怎么样？", "expected": 2},  # 后半句需实时数据
     {"query": "帮我写一段Python代码", "expected": 0},       # 编程辅助，无需检索
     {"query": "最近有什么新课吗？", "expected": 1},         # 课程相关，查内部资料
-    {"query": "能推荐一个AI框架吗？", "expected": 2},       # 需要外部对比信息
+    {"query": "能推荐一个AI框架吗？", "expected": 0},       # 基础推荐，不需实时数据
     {"query": "这门课学完工资能涨多少？", "expected": 1},   # 关于课程就业效果
     {"query": "你觉得报班学习和自学哪个好？", "expected": 1},  # 课程咨询场景
     {"query": "好的，那先这样吧，88", "expected": 0},       # 结束语
