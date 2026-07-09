@@ -133,8 +133,7 @@ function handleFileChange(uploadFile) {
 
 <style scoped>
 .chat-input-comp {
-  max-width: 760px;
-  margin: 0 auto;
+  /* max-width inherited from parent .chat-input-wrapper */
 }
 
 .input-writing-surface {

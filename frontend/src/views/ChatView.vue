@@ -16,7 +16,6 @@
           :key="index"
           :class="['message-item', msg.role]"
         >
-          <div v-if="msg.role === 'assistant'" class="message-avatar">📚</div>
           <div class="message-content">
             <!-- Tool badge -->
             <div v-if="msg.intent && msg.intent.code !== 0" class="msg-tool-badge">
@@ -42,7 +41,6 @@
               </div>
             </div>
           </div>
-          <div v-if="msg.role === 'user'" class="message-avatar">👤</div>
         </div>
 
         <!-- Streaming cursor -->
@@ -127,7 +125,27 @@ function scrollToBottom() {
 
 // ── Markdown renderer (marked + highlight.js) ──
 
+// Custom renderer: wrap tables in responsive scroll container
+const renderer = new marked.Renderer()
+const origTable = renderer.table.bind(renderer)
+renderer.table = function (header, body) {
+  return '<div class="table-wrapper">' + origTable(header, body) + '</div>'
+}
+// External links open in new tab with security attributes
+const origLink = renderer.link.bind(renderer)
+renderer.link = function (href, title, text) {
+  const isExternal = href && (href.startsWith('http://') || href.startsWith('https://'))
+  const attrs = isExternal ? ' target="_blank" rel="noopener noreferrer"' : ''
+  return `<a href="${href}"${attrs}${title ? ` title="${title}"` : ''}>${text}</a>`
+}
+// Images: responsive by default
+const origImage = renderer.image.bind(renderer)
+renderer.image = function (href, title, text) {
+  return `<img src="${href}" alt="${text}"${title ? ` title="${title}"` : ''} loading="lazy" class="md-image" />`
+}
+
 marked.setOptions({
+  renderer,
   highlight: function (code, lang) {
     if (lang && hljs.getLanguage(lang)) {
       try {
@@ -430,9 +448,9 @@ watch(activeSessionId, async (newId) => {
 }
 
 .message-list {
-  max-width: 760px;
+  max-width: 800px;
   margin: 0 auto;
-  padding: 0 28px;
+  padding: 0 32px;
 }
 
 /* ── Message Items ─────────────────────────────────── */
@@ -455,36 +473,11 @@ watch(activeSessionId, async (newId) => {
   justify-content: flex-start;
 }
 
-/* ── Avatars ───────────────────────────────────────── */
-.message-avatar {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  font-size: 16px;
-}
-
-.message-item.assistant .message-avatar {
-  margin-right: 16px;
-  background: linear-gradient(145deg, #1b2a2e, #162028);
-  border: 1px solid rgba(59, 130, 196, 0.2);
-}
-
-.message-item.user .message-avatar {
-  margin-left: 16px;
-  order: 2;
-  background: linear-gradient(145deg, #1e2430, #1a1f28);
-  border: 1px solid var(--border-subtle);
-}
-
 /* ── Message Content ───────────────────────────────── */
 .message-content {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   min-width: 0;
-  max-width: 82%;
+  max-width: 100%;
 }
 
 .message-item.user .message-content {
@@ -528,9 +521,9 @@ watch(activeSessionId, async (newId) => {
 }
 
 .message-item.assistant .message-bubble {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-subtle);
-  border-bottom-left-radius: var(--radius-sm);
+  background: none;
+  border: none;
+  padding: 4px 0;
 }
 
 /* ── Markdown Content ──────────────────────────────── */
@@ -611,22 +604,28 @@ watch(activeSessionId, async (newId) => {
 }
 
 /* Tables */
-.message-bubble table {
-  width: 100%;
-  max-width: 100%;
+.message-bubble .table-wrapper {
+  overflow-x: auto;
   margin: 12px 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.message-bubble .table-wrapper table {
+  width: 100%;
+  min-width: 100%;
+  margin: 0;
   border-collapse: collapse;
   font-size: 13px;
-  overflow-x: auto;
-  display: block;
 }
 
 .message-bubble thead {
   border-bottom: 2px solid var(--border-default);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .message-bubble th {
-  padding: 8px 14px;
+  padding: 10px 16px;
   text-align: left;
   font-weight: 650;
   color: var(--text-primary);
@@ -634,13 +633,37 @@ watch(activeSessionId, async (newId) => {
 }
 
 .message-bubble td {
-  padding: 8px 14px;
+  padding: 9px 16px;
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-primary);
 }
 
+.message-bubble tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.015);
+}
+
 .message-bubble tbody tr:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(59, 130, 196, 0.06);
+}
+
+/* Links */
+.message-bubble a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(59, 130, 196, 0.3);
+  transition: border-color var(--duration-fast);
+}
+
+.message-bubble a:hover {
+  border-bottom-color: var(--accent);
+}
+
+/* Images */
+.message-bubble img.md-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+  margin: 8px 0;
 }
 
 /* Code block language label */
@@ -679,13 +702,13 @@ watch(activeSessionId, async (newId) => {
     transparent 100%
   );
   opacity: 0.3;
-  margin: 0 28px;
+  margin: 0 32px;
 }
 
 .chat-input-wrapper {
-  max-width: 760px;
+  max-width: 800px;
   margin: 0 auto;
-  padding: 20px 28px 24px;
+  padding: 20px 32px 24px;
 }
 
 /* ── Streaming Cursor ──────────────────────────────── */
@@ -693,7 +716,7 @@ watch(activeSessionId, async (newId) => {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 0 4px 66px;
+  padding: 4px 0;
   font-size: 0.78rem;
   color: var(--text-muted);
   user-select: none;
@@ -710,11 +733,17 @@ watch(activeSessionId, async (newId) => {
 }
 
 /* ── Responsive ────────────────────────────────────── */
+@media (max-width: 1024px) {
+  .message-list { max-width: 90%; padding: 0 24px; }
+  .chat-input-wrapper { max-width: 90%; padding: 18px 24px 20px; }
+  .footer-threshold { margin: 0 24px; }
+}
+
 @media (max-width: 640px) {
-  .chat-input-wrapper { padding: 14px 14px 18px; }
+  .chat-input-wrapper { padding: 14px 14px 18px; max-width: 100%; }
   .footer-threshold { margin: 0 14px; }
-  .message-list { padding: 0 14px; }
-  .message-content { max-width: 90%; }
+  .message-list { padding: 0 14px; max-width: 100%; }
+  .message-content { max-width: 95%; }
   .message-bubble { padding: 12px 16px; font-size: 14px; }
 }
 </style>
