@@ -2,6 +2,17 @@
   <div class="chat-container">
     <!-- Messages -->
     <div class="chat-body" ref="chatBodyRef">
+      <!-- Scroll-to-bottom FAB when user has scrolled up -->
+      <Transition name="fab-fade">
+        <button
+          v-if="isUserScrolling"
+          class="scroll-bottom-fab"
+          @click="scrollToBottom(); isUserScrolling = false"
+          title="滚动到底部"
+        >
+          <span class="fab-arrow">↓</span>
+        </button>
+      </Transition>
       <div class="message-list">
         <!-- Empty State -->
         <WelcomeState
@@ -71,15 +82,63 @@
 </template>
 
 <script setup>
-import { ref, inject, watch, nextTick } from 'vue'
-import { ElMessage } from 'element-plus'
-import WelcomeState from '@/components/WelcomeState.vue'
-import ChatInput from '@/components/ChatInput.vue'
 import { sendMessageStream, uploadFile } from '@/api/chat'
-import { getSessionMessages, createSession } from '@/api/session'
-import { marked } from 'marked'
+import { createSession, getSessionMessages } from '@/api/session'
+import ChatInput from '@/components/ChatInput.vue'
+import WelcomeState from '@/components/WelcomeState.vue'
+import DOMPurify from 'dompurify'
+import { ElMessage } from 'element-plus'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
+import { marked } from 'marked'
+import { inject, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+
+// ── Module-level marked configuration (initialized once) ──
+
+const renderer = new marked.Renderer()
+const origTable = renderer.table.bind(renderer)
+renderer.table = function (header, body) {
+  return '<div class="table-wrapper">' + origTable(header, body) + '</div>'
+}
+const origLink = renderer.link.bind(renderer)
+renderer.link = function (href, title, text) {
+  const isExternal = href && (href.startsWith('http://') || href.startsWith('https://'))
+  const attrs = isExternal ? ' target="_blank" rel="noopener noreferrer"' : ''
+  // Block javascript: protocol links
+  const safeHref = href && /^javascript:/i.test(href) ? '#' : href
+  return `<a href="${safeHref}"${attrs}${title ? ` title="${title}"` : ''}>${text}</a>`
+}
+const origImage = renderer.image.bind(renderer)
+renderer.image = function (href, title, text) {
+  return `<img src="${href}" alt="${text}"${title ? ` title="${title}"` : ''} loading="lazy" class="md-image" />`
+}
+// Set data-lang attribute for CSS-based language label
+const origCode = renderer.code.bind(renderer)
+renderer.code = function (code, lang) {
+  const escapedLang = lang && hljs.getLanguage(lang) ? lang : ''
+  const dataLangAttr = escapedLang ? ` data-lang="${escapedLang}"` : ''
+  // Only highlight if code is reasonably sized
+  let highlighted = code
+  if (code.length <= 5000) {
+    if (lang && hljs.getLanguage(lang)) {
+      try {
+        highlighted = hljs.highlight(code, { language: lang }).value
+      } catch (_) { /* fall through */ }
+    } else {
+      try {
+        highlighted = hljs.highlightAuto(code).value
+      } catch (_) { /* fall through */ }
+    }
+  }
+  return `<pre${dataLangAttr}><code>${highlighted}</code></pre>`
+}
+
+marked.setOptions({
+  renderer,
+  highlight: function () { return '' }, // no-op, handled in renderer.code
+  breaks: true,
+  gfm: true,
+})
 
 const activeSessionId = inject('activeSessionId')
 const refreshSessions = inject('refreshSessions')
@@ -90,6 +149,12 @@ const uploadedFiles = ref([])
 const loading = ref(false)
 const thinking = ref(false)
 const chatBodyRef = ref(null)
+const isUserScrolling = ref(false)
+let thinkingTimeoutId = null
+let lastScrollTime = 0
+const SCROLL_THRESHOLD = 50
+const SCROLL_THROTTLE_MS = 50
+const THINKING_TIMEOUT_MS = 30000
 
 const defaultPlaceholder = "上传的文档不超过32M，文件格式限制为：'pdf', 'docx', 'txt', 'pptx', 'html', 'ipynb'"
 
@@ -123,48 +188,38 @@ function scrollToBottom() {
   })
 }
 
-// ── Markdown renderer (marked + highlight.js) ──
-
-// Custom renderer: wrap tables in responsive scroll container
-const renderer = new marked.Renderer()
-const origTable = renderer.table.bind(renderer)
-renderer.table = function (header, body) {
-  return '<div class="table-wrapper">' + origTable(header, body) + '</div>'
-}
-// External links open in new tab with security attributes
-const origLink = renderer.link.bind(renderer)
-renderer.link = function (href, title, text) {
-  const isExternal = href && (href.startsWith('http://') || href.startsWith('https://'))
-  const attrs = isExternal ? ' target="_blank" rel="noopener noreferrer"' : ''
-  return `<a href="${href}"${attrs}${title ? ` title="${title}"` : ''}>${text}</a>`
-}
-// Images: responsive by default
-const origImage = renderer.image.bind(renderer)
-renderer.image = function (href, title, text) {
-  return `<img src="${href}" alt="${text}"${title ? ` title="${title}"` : ''} loading="lazy" class="md-image" />`
+// Scroll lock: detect when user manually scrolls up
+function onChatScroll() {
+  const el = chatBodyRef.value
+  if (!el) return
+  const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+  isUserScrolling.value = distFromBottom > SCROLL_THRESHOLD
 }
 
-marked.setOptions({
-  renderer,
-  highlight: function (code, lang) {
-    if (lang && hljs.getLanguage(lang)) {
-      try {
-        return hljs.highlight(code, { language: lang }).value
-      } catch (_) { /* fall through */ }
-    }
-    try {
-      return hljs.highlightAuto(code).value
-    } catch (_) { /* fall through */ }
-    return code
-  },
-  breaks: true,
-  gfm: true,
+function clearThinkingTimeout() {
+  if (thinkingTimeoutId) {
+    clearTimeout(thinkingTimeoutId)
+    thinkingTimeoutId = null
+  }
+}
+
+onMounted(() => {
+  chatBodyRef.value?.addEventListener('scroll', onChatScroll, { passive: true })
 })
+
+onUnmounted(() => {
+  chatBodyRef.value?.removeEventListener('scroll', onChatScroll)
+  clearThinkingTimeout()
+})
+
+// ── Markdown renderer (with XSS sanitization) ──
 
 function renderMarkdown(text) {
   if (!text) return ''
   try {
-    return marked.parse(text)
+    const raw = marked.parse(text)
+    // DOMPurify defaults allow all standard HTML tags/attrs; only need to whitelist data-lang
+    return DOMPurify.sanitize(raw, { ADD_ATTR: ['data-lang'] })
   } catch (_) {
     // 流式输出时 markdown 可能不完整，降级为纯文本
     let safe = text
@@ -252,6 +307,8 @@ async function handleSend() {
 
   // 确保 DOM 渲染后再开始流式更新
   await nextTick()
+  isUserScrolling.value = false
+  lastScrollTime = 0
   scrollToBottom()
 
   // 用局部变量累积内容，通过数组元素替换确保 Vue 响应式
@@ -274,7 +331,14 @@ async function handleSend() {
       requestAnimationFrame(() => {
         rafPending = false
         flushContent()
-        scrollToBottom()
+        // Scroll only if user hasn't scrolled up, with min interval throttle
+        if (!isUserScrolling.value) {
+          const now = Date.now()
+          if (now - lastScrollTime > SCROLL_THROTTLE_MS) {
+            scrollToBottom()
+            lastScrollTime = now
+          }
+        }
       })
     }
   }
@@ -306,17 +370,24 @@ async function handleSend() {
 
         case 'thinking':
           thinking.value = true
+          clearThinkingTimeout()
+          thinkingTimeoutId = setTimeout(() => {
+            thinking.value = false
+            thinkingTimeoutId = null
+          }, THINKING_TIMEOUT_MS)
           scheduleRender()
           break
 
         case 'token':
           thinking.value = false
+          clearThinkingTimeout()
           streamContent += event.data
           scheduleRender()
           break
 
         case 'error':
           thinking.value = false
+          clearThinkingTimeout()
           if (!streamContent) {
             streamContent = `处理错误: ${event.data}`
             flushContent()
@@ -326,6 +397,7 @@ async function handleSend() {
 
         case 'done':
           thinking.value = false
+          clearThinkingTimeout()
           if (!streamContent) {
             streamContent = '抱歉，未能生成回答。'
             flushContent()
@@ -335,15 +407,18 @@ async function handleSend() {
     }
   } catch (err) {
     thinking.value = false
+    clearThinkingTimeout()
     if (!streamContent) {
       streamContent = `请求失败: ${err.message}。请检查后端服务是否正常运行。`
       flushContent()
     }
     ElMessage.error('无法连接到后端服务')
   } finally {
-    // 确保最终内容已刷新
+    // 确保最终内容已刷新，重置滚动状态
+    clearThinkingTimeout()
     flushContent()
     loading.value = false
+    isUserScrolling.value = false
     refreshSessions?.()
     scrollToBottom()
   }
@@ -421,7 +496,7 @@ watch(activeSessionId, async (newId) => {
     if (activeSessionId.value !== newId || loading.value) return
     messages.value = (data.messages || []).map((m) => ({
       role: m.role === 'assistant' ? 'assistant' : 'user',
-      content: m.role === 'user' ? cleanDisplayContent(m.content) : m.content,
+      content: cleanDisplayContent(m.content),
     }))
     scrollToBottom()
   } catch {
@@ -527,24 +602,26 @@ watch(activeSessionId, async (newId) => {
 }
 
 /* ── Markdown Content ──────────────────────────────── */
-.message-bubble p { margin: 0 0 10px 0; line-height: 1.8; }
-.message-bubble p:last-child { margin-bottom: 0; }
+.message-bubble :deep(p) { margin: 0 0 10px 0; line-height: 1.8; }
+.message-bubble :deep(p:last-child) { margin-bottom: 0; }
 
-.message-bubble strong { color: var(--text-primary); font-weight: 650; }
-.message-bubble em { color: var(--text-secondary); }
+.message-bubble :deep(strong) { color: var(--text-primary); font-weight: 650; }
+.message-bubble :deep(em) { color: var(--text-secondary); }
 
-.message-bubble h2, .message-bubble h3, .message-bubble h4 {
+.message-bubble :deep(h2),
+.message-bubble :deep(h3),
+.message-bubble :deep(h4) {
   font-family: var(--font-display);
   color: var(--text-primary);
   margin: 16px 0 8px 0;
   font-weight: 600;
 }
 
-.message-bubble h2 { font-size: 1.2em; }
-.message-bubble h3 { font-size: 1.1em; }
-.message-bubble h4 { font-size: 1em; }
+.message-bubble :deep(h2) { font-size: 1.2em; }
+.message-bubble :deep(h3) { font-size: 1.1em; }
+.message-bubble :deep(h4) { font-size: 1em; }
 
-.message-bubble code {
+.message-bubble :deep(code) {
   background: var(--bg-elevated);
   border: 1px solid var(--border-default);
   border-radius: 4px;
@@ -554,7 +631,7 @@ watch(activeSessionId, async (newId) => {
   color: var(--accent);
 }
 
-.message-bubble pre {
+.message-bubble :deep(pre) {
   background: #0d1116;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
@@ -563,7 +640,7 @@ watch(activeSessionId, async (newId) => {
   margin: 12px 0;
 }
 
-.message-bubble pre code {
+.message-bubble :deep(pre code) {
   background: transparent;
   border: none;
   padding: 0;
@@ -571,24 +648,25 @@ watch(activeSessionId, async (newId) => {
 }
 
 /* Plain code blocks (no language / no highlighting) keep uniform color */
-.message-bubble pre code:not([class]) {
+.message-bubble :deep(pre code:not([class])) {
   color: #c8c0b4;
 }
 
 /* Let highlight.js manage colors for highlighted code */
-.message-bubble pre code.hljs {
+.message-bubble :deep(pre code.hljs) {
   color: inherit;
 }
 
-.message-bubble ul, .message-bubble ol {
+.message-bubble :deep(ul),
+.message-bubble :deep(ol) {
   margin: 10px 0;
   padding-left: 24px;
 }
 
-.message-bubble li { margin-bottom: 5px; }
-.message-bubble li::marker { color: var(--text-muted); }
+.message-bubble :deep(li) { margin-bottom: 5px; }
+.message-bubble :deep(li::marker) { color: var(--text-muted); }
 
-.message-bubble blockquote {
+.message-bubble :deep(blockquote) {
   border-left: 2px solid var(--accent);
   margin: 10px 0;
   padding: 6px 16px;
@@ -597,69 +675,101 @@ watch(activeSessionId, async (newId) => {
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
-.message-bubble hr {
+.message-bubble :deep(hr) {
   border: none;
   border-top: 1px solid var(--border-subtle);
   margin: 14px 0;
 }
 
 /* Tables */
-.message-bubble .table-wrapper {
+.message-bubble :deep(.table-wrapper) {
   overflow-x: auto;
   margin: 12px 0;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
+  /* Right-edge scroll hint gradient */
+  background: linear-gradient(to left, rgba(0,0,0,0.12) 0%, transparent 40px) no-repeat right / 40px 100%;
 }
 
-.message-bubble .table-wrapper table {
+/* Custom scrollbar for table wrapper */
+.message-bubble :deep(.table-wrapper::-webkit-scrollbar) {
+  height: 6px;
+}
+
+.message-bubble :deep(.table-wrapper::-webkit-scrollbar-track) {
+  background: transparent;
+  border-radius: 3px;
+}
+
+.message-bubble :deep(.table-wrapper::-webkit-scrollbar-thumb) {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+}
+
+.message-bubble :deep(.table-wrapper::-webkit-scrollbar-thumb:hover) {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.message-bubble :deep(.table-wrapper table) {
   width: 100%;
   min-width: 100%;
   margin: 0;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 14px;
 }
 
-.message-bubble thead {
+.message-bubble :deep(thead) {
   border-bottom: 2px solid var(--border-default);
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(255, 255, 255, 0.03);
 }
 
-.message-bubble th {
+.message-bubble :deep(th) {
   padding: 10px 16px;
   text-align: left;
   font-weight: 650;
   color: var(--text-primary);
   white-space: nowrap;
+  border-right: 1px solid var(--border-subtle);
 }
 
-.message-bubble td {
-  padding: 9px 16px;
+.message-bubble :deep(th:last-child) {
+  border-right: none;
+}
+
+.message-bubble :deep(td) {
+  padding: 10px 16px;
   border-bottom: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
   color: var(--text-primary);
+  vertical-align: top;
 }
 
-.message-bubble tbody tr:nth-child(even) {
-  background: rgba(255, 255, 255, 0.015);
+.message-bubble :deep(td:last-child) {
+  border-right: none;
 }
 
-.message-bubble tbody tr:hover {
+.message-bubble :deep(tbody tr:nth-child(even)) {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.message-bubble :deep(tbody tr:hover) {
   background: rgba(59, 130, 196, 0.06);
 }
 
 /* Links */
-.message-bubble a {
+.message-bubble :deep(a) {
   color: var(--accent);
   text-decoration: none;
   border-bottom: 1px solid rgba(59, 130, 196, 0.3);
   transition: border-color var(--duration-fast);
 }
 
-.message-bubble a:hover {
+.message-bubble :deep(a:hover) {
   border-bottom-color: var(--accent);
 }
 
 /* Images */
-.message-bubble img.md-image {
+.message-bubble :deep(img.md-image) {
   max-width: 100%;
   height: auto;
   border-radius: var(--radius-sm);
@@ -667,12 +777,12 @@ watch(activeSessionId, async (newId) => {
 }
 
 /* Code block language label */
-.message-bubble pre {
+.message-bubble :deep(pre) {
   position: relative;
 }
 
-.message-bubble pre[class]::before {
-  content: attr(class);
+.message-bubble :deep(pre[data-lang])::before {
+  content: attr(data-lang);
   position: absolute;
   top: 0;
   right: 12px;
@@ -709,6 +819,46 @@ watch(activeSessionId, async (newId) => {
   max-width: 800px;
   margin: 0 auto;
   padding: 20px 32px 24px;
+}
+
+/* ── Scroll-to-bottom FAB ─────────────────────────── */
+.scroll-bottom-fab {
+  position: sticky;
+  bottom: 12px;
+  float: right;
+  z-index: 10;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+
+.scroll-bottom-fab:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.fab-arrow {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.fab-fade-enter-active,
+.fab-fade-leave-active {
+  transition: opacity 0.2s var(--ease-out);
+}
+.fab-fade-enter-from,
+.fab-fade-leave-to {
+  opacity: 0;
 }
 
 /* ── Streaming Cursor ──────────────────────────────── */

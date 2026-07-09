@@ -110,9 +110,25 @@ class WebSearchManager:
 
 # ── Web 上下文格式化（模块级函数）──
 
+import re
+
+# 匹配 AI 搜索引擎残留的 citation 标记，如 【5†L9-L18】、【1†L5-L7】
+_CITATION_PATTERN = re.compile(r'【\d+[†‡]\s*[^】]+】')
+
+
+def _clean_content(text: str) -> str:
+    """清洗搜索结果中的 citation 标记和多余空白"""
+    text = _CITATION_PATTERN.sub('', text)
+    # 合并清洗产生的连续空白
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = re.sub(r' {2,}', ' ', text)
+    return text.strip()
+
+
 def format_web_context(results: list[dict]) -> str:
     """
     将网络搜索结果格式化为 LLM 上下文字符串。
+    自动清洗 AI 搜索引擎残留的 citation 标记。
 
     Args:
         results: [{"content": ..., "title": ..., "url": ..., "score": ...}, ...]
@@ -125,9 +141,10 @@ def format_web_context(results: list[dict]) -> str:
 
     parts = []
     for i, r in enumerate(results):
+        content = _clean_content(r.get('content', ''))
         parts.append(
             f"[网络来源 {i + 1} · {r.get('title', '未知')} · 相关度 {r.get('score', 0):.2f}]\n"
             f"URL: {r.get('url', '')}\n"
-            f"{r.get('content', '')}"
+            f"{content}"
         )
     return "\n\n---\n\n".join(parts)

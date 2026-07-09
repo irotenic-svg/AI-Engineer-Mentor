@@ -313,6 +313,7 @@ def chat_stream():
             # ── Step 2: 工具路由 ──
             sources = []
             context_str = ""
+            rag_scores = None  # 用于低相关度检测
 
             if intent_code == IntentCode.RAG:
                 # ── RAG 检索 ──
@@ -331,7 +332,7 @@ def chat_stream():
                         ]
                         if filtered:
                             sources = format_sources(filtered)
-                            context_str = format_context(filtered)
+                            context_str, rag_scores = format_context(filtered)
                     except Exception as rag_err:
                         print(f"[RAG] 检索失败: {rag_err}")
 
@@ -367,7 +368,9 @@ def chat_stream():
 
             history = fetch_messages(conn, session_id)
             messages = build_messages_with_context(
-                context_str, history, question, int(intent_code) if intent_code else 0
+                context_str, history, question,
+                int(intent_code) if intent_code else 0,
+                rag_scores,
             )
 
             # ── Step 5: 发送 thinking 事件 + LLM 流式 ──
