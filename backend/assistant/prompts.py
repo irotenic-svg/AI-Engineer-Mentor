@@ -181,20 +181,43 @@ def build_messages_with_context(
     rag_scores: Optional[List[float]] = None,
 ) -> List[dict]:
     """
-    构建 LLM 消息列表，根据意图注入对应上下文。
-
-    Args:
-        context_str: 检索/搜索上下文（可为空）
-        history: 历史消息列表 [{role, content}]
-        question: 当前用户问题
-        intent: 意图代码（可选）
-        rag_scores: RAG 相关度分数列表（可选）
-
-    Returns:
-        [{"role": "system", "content": ...}, ...]
+    构建 LLM 消息列表，根据意图注入对应上下文（基础版，硬编码20条）。
+    如需智能压缩，请使用 build_messages_with_context_v2。
     """
     system_content = build_system_prompt(context_str, intent, rag_scores)
     messages = [{"role": "system", "content": system_content}]
     for msg in history[-20:]:
         messages.append({"role": msg["role"], "content": msg["content"]})
     return messages
+
+
+def build_messages_with_context_v2(
+    context_str: str,
+    history: List[dict],
+    question: str,
+    intent: Optional[int] = None,
+    rag_scores: Optional[List[float]] = None,
+    session_summary: Optional[str] = None,
+    user_profile: Optional[dict] = None,
+    task_hint: Optional[str] = None,
+) -> List[dict]:
+    """
+    构建 LLM 消息列表（智能上下文压缩版）。
+    
+    相比 v1 的改进：
+    - 基于 token 估算动态压缩历史，不再硬编码 20 条
+    - 支持会话摘要替代早期对话
+    - 支持用户画像注入
+    - 支持任务路由 hint 注入
+    """
+    from assistant.context_manager import build_context_aware_messages
+    
+    system_prompt = build_system_prompt(context_str, intent, rag_scores)
+    return build_context_aware_messages(
+        system_prompt=system_prompt,
+        history=history,
+        current_question=question,
+        session_summary=session_summary,
+        user_profile=user_profile,
+        task_hint=task_hint,
+    )

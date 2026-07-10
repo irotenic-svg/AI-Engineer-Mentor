@@ -29,11 +29,12 @@ def connect(db_path: str) -> sqlite3.Connection:
 
 
 def ensure_schema(conn: sqlite3.Connection):
-    """创建表结构"""
+    """创建表结构（支持增量迁移）"""
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            profile_json TEXT DEFAULT NULL
         );
 
         CREATE TABLE IF NOT EXISTS sessions (
@@ -42,6 +43,8 @@ def ensure_schema(conn: sqlite3.Connection):
             title TEXT NOT NULL DEFAULT '新对话',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
+            task_state_json TEXT DEFAULT NULL,
+            summary TEXT DEFAULT NULL,
             FOREIGN KEY(username) REFERENCES users(username)
         );
 
@@ -63,6 +66,32 @@ def ensure_schema(conn: sqlite3.Connection):
         CREATE INDEX IF NOT EXISTS idx_messages_created_at
             ON messages(created_at);
     """)
+    # ── 增量迁移：兼容旧数据库 ──
+    # 1. sessions.task_state_json
+    try:
+        conn.execute("SELECT task_state_json FROM sessions LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE sessions ADD COLUMN task_state_json TEXT DEFAULT NULL")
+        conn.commit()
+        print("[DB Migration] Added task_state_json column to sessions")
+    
+    # 2. sessions.summary
+    try:
+        conn.execute("SELECT summary FROM sessions LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE sessions ADD COLUMN summary TEXT DEFAULT NULL")
+        conn.commit()
+        print("[DB Migration] Added summary column to sessions")
+    
+    # 3. users.profile_json
+    try:
+        conn.execute("SELECT profile_json FROM users LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE users ADD COLUMN profile_json TEXT DEFAULT NULL")
+        conn.commit()
+        print("[DB Migration] Added profile_json column to users")
+
+
 
 
 def now_iso() -> str:
@@ -257,3 +286,103 @@ def fetch_messages(conn: sqlite3.Connection, session_id: str) -> list[dict]:
          "created_at": row["created_at"]}
         for row in rows
     ]
+
+
+# ── Task State CRUD ────────────────────────────────
+
+
+def get_task_state(conn: sqlite3.Connection, session_id: str) -> dict | None:
+    """获取会话的任务状态 JSON"""
+    row = conn.execute(
+        "SELECT task_state_json FROM sessions WHERE id = ?",
+        (session_id,),
+    ).fetchone()
+    if row and row["task_state_json"]:
+        import json
+        try:
+            return json.loads(row["task_state_json"])
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def update_task_state(conn: sqlite3.Connection, session_id: str, state_dict: dict):
+    """更新会话的任务状态"""
+    import json
+    conn.execute(
+        "UPDATE sessions SET task_state_json = ? WHERE id = ?",
+        (json.dumps(state_dict, ensure_ascii=False), session_id),
+    )
+    conn.commit()
+
+
+def clear_task_state(conn: sqlite3.Connection, session_id: str):
+    """清除会话的任务状态（用于重置）"""
+    conn.execute(
+        "UPDATE sessions SET task_state_json = NULL WHERE id = ?",
+        (session_id,),
+    )
+    conn.commit()
+
+
+# ── Session Summary CRUD ───────────────────────────
+
+
+def get_session_summary(conn: sqlite3.Connection, session_id: str) -> str | None:
+    """获取会话摘要"""
+    row = conn.execute(
+        "SELECT summary FROM sessions WHERE id = ?",
+        (session_id,),
+    ).fetchone()
+    return row["summary"] if row and row["summary"] else None
+
+
+def update_session_summary(conn: sqlite3.Connection, session_id: str, summary: str):
+    """更新会话摘要"""
+    conn.execute(
+        "UPDATE sessions SET summary = ? WHERE id = ?",
+        (summary, session_id),
+    )
+    conn.commit()
+
+
+# ── User Profile CRUD ──────────────────────────────
+
+
+def get_user_profile(conn: sqlite3.Connection, username: str) -> dict | None:
+    """获取用户画像 JSON"""
+    row = conn.execute(
+        "SELECT profile_json FROM users WHERE username = ?",
+        (username,),
+    ).fetchone()
+    if row and row["profile_json"]:
+        import json
+        try:
+            return json.loads(row["profile_json"])
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def update_user_profile(conn: sqlite3.Connection, username: str, profile: dict):
+    """更新用户画像（合并模式）"""
+    import json
+    existing = get_user_profile(conn, username) or {}
+    # 合并新数据到已有数据
+    for k, v in profile.items():
+        if v is not None:
+            existing[k] = v
+    conn.execute(
+        "UPDATE users SET profile_json = ? WHERE username = ?",
+        (json.dumps(existing, ensure_ascii=False), username),
+    )
+    conn.commit()
+
+
+def clear_user_profile(conn: sqlite3.Connection, username: str):
+    """清除用户画像"""
+    conn.execute(
+        "UPDATE users SET profile_json = NULL WHERE username = ?",
+        (username,),
+    )
+    conn.commit()

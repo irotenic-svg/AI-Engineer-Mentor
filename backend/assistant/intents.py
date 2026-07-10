@@ -147,15 +147,19 @@ def detect_intent(
     query: str,
     model: str,
     enabled: bool = True,
+    history: Optional[list] = None,
+    previous_intent: Optional[int] = None,
 ) -> tuple:
     """
-    分类用户意图。
+    分类用户意图（支持多轮对话上下文）。
 
     Args:
         llm: OpenAI 兼容客户端实例
         query: 用户问题
         model: 模型名
         enabled: 是否启用意图识别
+        history: 最近对话历史 [{"role": ..., "content": ...}]（可选）
+        previous_intent: 上一轮意图代码（可选）
 
     Returns:
         (IntentCode, source_label)
@@ -167,11 +171,26 @@ def detect_intent(
     if not llm:
         return _keyword_intent(query), "keyword"
 
+    # 构建多轮上下文提示
+    context_hint = ""
+    if previous_intent is not None and history:
+        # 提取最近 2 轮对话的关键信息
+        recent = history[-4:]  # 最近 4 条（2 轮）
+        if recent:
+            prev_label = {0: "CHAT", 1: "RAG", 2: "WEB_SEARCH"}.get(previous_intent, "CHAT")
+            context_hint = f"\n\n对话上下文（有助于理解指代和追问）："
+            context_hint += f"\n- 上一轮意图: {prev_label}"
+            for m in recent[-2:]:  # 最近一轮
+                role = "用户" if m["role"] == "user" else "助手"
+                snippet = m["content"][:80].replace("\n", " ")
+                context_hint += f"\n- {role}: {snippet}..."
+            context_hint += "\n注意：如果当前问题是接着上一轮的追问（如'Java的呢？''那门课多少钱？'），请结合上下文判断，而非把省略表达当作闲聊。"
+
     try:
         response = llm.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": INTENT_SYSTEM_PROMPT},
+                {"role": "system", "content": INTENT_SYSTEM_PROMPT + context_hint},
                 {"role": "user", "content": query},
             ],
             tools=INTENT_TOOLS,

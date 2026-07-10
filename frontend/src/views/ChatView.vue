@@ -28,6 +28,25 @@
           :class="['message-item', msg.role]"
         >
           <div class="message-content">
+            <!-- Task plan / stage indicator -->
+            <div v-if="msg.taskMeta" class="msg-task-meta">
+              <div class="task-meta-header">
+                <span class="task-type-tag">{{ taskTypeLabel(msg.taskMeta.task_type) }}</span>
+                <span class="task-complexity" :class="'c' + msg.taskMeta.complexity">{{ complexityLabel(msg.taskMeta.complexity) }}</span>
+                <span class="task-stage">{{ stageLabel(msg.taskMeta.stage) }}</span>
+              </div>
+              <div v-if="msg.taskPlan && msg.taskPlan.length" class="task-plan-steps">
+                <div
+                  v-for="step in msg.taskPlan"
+                  :key="step.step"
+                  class="task-step"
+                  :class="{ active: step.status === 'in_progress', done: step.status === 'done' }"
+                >
+                  <span class="step-num">{{ step.step }}</span>
+                  <span class="step-title">{{ step.title }}</span>
+                </div>
+              </div>
+            </div>
             <!-- Tool badge -->
             <div v-if="msg.intent && msg.intent.code !== 0" class="msg-tool-badge">
               <span v-if="msg.intent.code === 1" class="tool-tag rag">📚 课程资料</span>
@@ -165,6 +184,40 @@ const suggestions = [
   '全日制课程和周末班有什么区别？',
   '课程学完后有就业推荐吗？',
 ]
+
+// ── Task Meta Helpers ──────────────────────────────
+
+const TASK_TYPE_LABELS = {
+  direct_answer: '直接回答',
+  course_inquiry: '课程咨询',
+  tech_question: '技术问题',
+  comparison: '对比分析',
+  career_guidance: '职业规划',
+  study_plan: '学习规划',
+}
+
+const COMPLEXITY_LABELS = { 1: '简单', 2: '中等', 3: '复杂' }
+
+const STAGE_LABELS = {
+  analyzing: '分析中',
+  clarifying: '待澄清',
+  gathering: '信息收集中',
+  reasoning: '综合分析中',
+  answering: '生成回答',
+  done: '已完成',
+}
+
+function taskTypeLabel(type) {
+  return TASK_TYPE_LABELS[type] || type
+}
+
+function complexityLabel(level) {
+  return COMPLEXITY_LABELS[level] || '未知'
+}
+
+function stageLabel(stage) {
+  return STAGE_LABELS[stage] || stage
+}
 
 // ── Helpers ──────────────────────────────────────
 
@@ -346,6 +399,28 @@ async function handleSend() {
   try {
     for await (const event of sendMessageStream(fullContent, sid)) {
       switch (event.type) {
+        case 'plan':
+          if (event.data && messages.value[aiIdx]) {
+            messages.value[aiIdx] = {
+              ...messages.value[aiIdx],
+              taskPlan: event.data.steps || [],
+            }
+          }
+          break
+
+        case 'stage':
+          if (event.data && messages.value[aiIdx]) {
+            messages.value[aiIdx] = {
+              ...messages.value[aiIdx],
+              taskMeta: {
+                stage: event.data.stage,
+                complexity: event.data.complexity,
+                task_type: event.data.task_type,
+              },
+            }
+          }
+          break
+
         case 'sources':
           if (event.data && event.data.length > 0 && messages.value[aiIdx]) {
             messages.value[aiIdx] = {
@@ -561,6 +636,105 @@ watch(activeSessionId, async (newId) => {
   align-items: flex-end;
 }
 
+/* ── Task Meta ─────────────────────────────────────── */
+.msg-task-meta {
+  margin-bottom: 10px;
+  padding: 10px 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  font-size: 12.5px;
+}
+
+.task-meta-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.task-type-tag {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.task-complexity {
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.task-complexity.c1 {
+  background: rgba(82, 196, 26, 0.12);
+  color: #52c41a;
+}
+
+.task-complexity.c2 {
+  background: rgba(250, 173, 20, 0.12);
+  color: #faad14;
+}
+
+.task-complexity.c3 {
+  background: rgba(255, 77, 79, 0.12);
+  color: #ff4d4f;
+}
+
+.task-stage {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.task-plan-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.task-step {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  transition: all 0.2s;
+}
+
+.task-step.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(59, 130, 196, 0.08);
+}
+
+.task-step.done {
+  opacity: 0.6;
+  text-decoration: line-through;
+}
+
+.step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--border-default);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.task-step.active .step-num {
+  background: var(--accent);
+  color: #fff;
+}
+
 /* ── Attached files on user messages ───────────────── */
 .msg-files {
   display: flex;
@@ -616,7 +790,6 @@ watch(activeSessionId, async (newId) => {
   margin: 16px 0 8px 0;
   font-weight: 600;
 }
-
 .message-bubble :deep(h2) { font-size: 1.2em; }
 .message-bubble :deep(h3) { font-size: 1.1em; }
 .message-bubble :deep(h4) { font-size: 1em; }

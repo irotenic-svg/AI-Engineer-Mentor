@@ -1,6 +1,6 @@
 """
 Flask API 入口 - AI 课程咨询助手后端
-支持 SSE 流式问答、会话管理、文件上传
+支持 SSE 流式问答、会话管理、文件上传、多轮任务路由
 """
 import json
 import uuid
@@ -11,7 +11,9 @@ from flask_cors import CORS
 
 from config import load_settings
 from db import connect, ensure_schema, ensure_user, create_session, \
-    list_sessions, rename_session, delete_session, add_message, fetch_messages
+    list_sessions, rename_session, delete_session, add_message, fetch_messages, \
+    get_task_state, update_task_state, get_session_summary, update_session_summary, \
+    get_user_profile, update_user_profile
 
 # ── 初始化 ──────────────────────────────────────────
 
@@ -84,6 +86,34 @@ def _init_rag():
 # ── Web Search 初始化（延迟加载） ──
 _web_search_manager = None
 _web_search_ready = None
+
+
+# ── Task Router 初始化（延迟加载） ──
+_task_router = None
+_task_router_ready = False
+
+
+def _init_task_router():
+    """懒加载 TaskRouter"""
+    global _task_router, _task_router_ready
+    if _task_router_ready:
+        return _task_router
+    try:
+        from assistant.task_router import TaskRouter
+        llm = get_llm()
+        _task_router = TaskRouter(
+            llm=llm,
+            model=settings.llm_model,
+            use_llm=True,
+        )
+        _task_router_ready = True
+        print("[Init] Task Router ready")
+        return _task_router
+    except Exception as e:
+        print(f"[Init] Task Router 初始化失败（非致命）: {e}")
+        _task_router_ready = True  # 标记已尝试，避免重复
+        _task_router = None
+        return None
 
 
 def _init_web_search():
@@ -259,9 +289,9 @@ def get_session_messages(session_id):
 @app.route("/api/chat/stream", methods=["POST"])
 def chat_stream():
     """
-    SSE 流式聊天接口
+    SSE 流式聊天接口（多轮任务路由增强版）
     接收 {"session_id": "...", "question": "..."}
-    事件流: token → done / error
+    事件流: plan → stage → intent → (web_search) → sources → thinking → token* → done / error
     """
     data = request.get_json()
     if not data or "question" not in data:
@@ -280,16 +310,46 @@ def chat_stream():
         pass  # session 可能还不存在
 
     def generate():
-        """SSE 事件生成器 — 意图识别 → 工具路由 → 上下文 → LLM 流式"""
+        """SSE 事件生成器 — 任务路由 → 意图识别 → 工具路由 → 上下文 → LLM 流式"""
         full_answer = ""
         intent_code = None
         intent_source = None
+        task_state = None
 
         try:
             llm = get_llm()
 
-            # ── Step 1: 意图识别 ──
+            # ── Step 0: 加载历史与任务状态 ──
+            history = fetch_messages(conn, session_id)
+            session_summary = None
+            user_profile = None
+            try:
+                from assistant.task_router import TaskState as TRState
+                state_dict = get_task_state(conn, session_id)
+                task_state = TRState.from_dict(state_dict) if state_dict else None
+            except Exception as te:
+                print(f"[TaskRouter] 加载状态失败: {te}")
+                task_state = None
+            
+            # 加载会话摘要
+            try:
+                session_summary = get_session_summary(conn, session_id)
+            except Exception as se:
+                print(f"[ContextManager] 加载会话摘要失败: {se}")
+            
+            # 加载用户画像
+            try:
+                username = _get_username()
+                if username:
+                    user_profile = get_user_profile(conn, username)
+            except Exception as ue:
+                print(f"[ContextManager] 加载用户画像失败: {ue}")
+
+            # ── Step 1: 意图识别（多轮上下文感知）──
             from assistant.intents import detect_intent, IntentCode
+
+            # 获取上一轮意图，用于多轮追问判断
+            prev_intent = task_state.original_intent if task_state and task_state.round_count > 0 else None
 
             if settings.intent_enabled:
                 try:
@@ -298,6 +358,8 @@ def chat_stream():
                         query=question,
                         model=settings.llm_model,
                         enabled=settings.intent_enabled,
+                        history=history,
+                        previous_intent=prev_intent,
                     )
                 except Exception as ie:
                     print(f"[Intent] 分类异常: {ie}")
@@ -307,13 +369,82 @@ def chat_stream():
                 intent_code = IntentCode.CHAT
                 intent_source = "disabled"
 
-            # 发送 intent 事件给前端
+            # ── Step 2: 多轮任务路由分析 ──
+            analysis = None
+            should_clarify = False
+            clarifying_answer = ""
+            task_hint = ""
+
+            router = _init_task_router()
+            if router:
+                try:
+                    analysis, task_state = router.analyze(
+                        query=question,
+                        current_state=task_state,
+                        history=history,
+                        intent_code=int(intent_code) if intent_code else 0,
+                    )
+                    should_clarify = analysis.should_clarify
+
+                    # 发送 plan 事件（如果有计划）
+                    if analysis.plan:
+                        yield f"data: {json.dumps({'type': 'plan', 'data': {'steps': analysis.plan, 'reason': analysis.reason}}, ensure_ascii=False)}\n\n"
+
+                    # 发送 stage 事件
+                    yield f"data: {json.dumps({'type': 'stage', 'data': {'stage': task_state.stage.value, 'complexity': task_state.complexity.value, 'task_type': task_state.task_type.value}}, ensure_ascii=False)}\n\n"
+
+                    # 如果需要澄清，生成追问回答
+                    if should_clarify and analysis.suggested_questions:
+                        # 构建自然的追问文本
+                        questions_text = "\n".join(
+                            f"{i+1}. {q}" for i, q in enumerate(analysis.suggested_questions)
+                        )
+                        clarifying_answer = (
+                            f"为了更好地帮您解答，我想再了解一些情况：\n\n"
+                            f"{questions_text}\n\n"
+                            f"您可以挑选其中几点回复，我会根据您的情况给出更精准的建议。"
+                        )
+                        task_state.stage = task_state.stage  # 保持 clarifying
+
+                    # 构建 task hint（用于注入系统提示词）
+                    task_hint = router.build_system_hint(task_state)
+
+                except Exception as te:
+                    print(f"[TaskRouter] 分析失败: {te}")
+                    # 失败时回退到原有流程
+                    should_clarify = False
+
+            # 保存更新后的任务状态
+            if task_state:
+                try:
+                    update_task_state(conn, session_id, task_state.to_dict())
+                except Exception as se:
+                    print(f"[TaskRouter] 保存状态失败: {se}")
+
+            # 发送 intent 事件（向后兼容）
             yield f"data: {json.dumps({'type': 'intent', 'data': {'code': int(intent_code), 'source': intent_source}}, ensure_ascii=False)}\n\n"
 
-            # ── Step 2: 工具路由 ──
+            # ── Step 3: 如果需要澄清，直接输出追问 ──
+            if should_clarify and clarifying_answer:
+                # 模拟流式输出追问
+                for chunk in clarifying_answer:
+                    full_answer += chunk
+                    yield f"data: {json.dumps({'type': 'token', 'data': chunk}, ensure_ascii=False)}\n\n"
+
+                # 保存 AI 追问
+                if full_answer:
+                    try:
+                        add_message(conn, session_id, "assistant", full_answer)
+                    except Exception:
+                        pass
+
+                yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+                return  # 提前结束，不走LLM主流程
+
+            # ── Step 4: 工具路由（原有逻辑）──
             sources = []
             context_str = ""
-            rag_scores = None  # 用于低相关度检测
+            rag_scores = None
 
             if intent_code == IntentCode.RAG:
                 # ── RAG 检索 ──
@@ -358,22 +489,31 @@ def chat_stream():
                         print(f"[WebSearch] 搜索失败: {ws_err}")
                         yield f"data: {json.dumps({'type': 'web_search', 'data': {'status': 'error', 'message': str(ws_err)}}, ensure_ascii=False)}\n\n"
 
-            # else IntentCode.CHAT: 不使用任何工具
-
-            # ── Step 3: 发送统一 sources 事件 ──
+            # 发送 sources 事件
             yield f"data: {json.dumps({'type': 'sources', 'data': sources}, ensure_ascii=False)}\n\n"
 
-            # ── Step 4: 构建消息（意图感知）──
-            from assistant.prompts import build_messages_with_context
+            # ── Step 5: 构建消息（意图感知 + 智能上下文 + 任务路由 hint）──
+            from assistant.prompts import build_messages_with_context_v2
 
-            history = fetch_messages(conn, session_id)
-            messages = build_messages_with_context(
-                context_str, history, question,
-                int(intent_code) if intent_code else 0,
-                rag_scores,
+            messages = build_messages_with_context_v2(
+                context_str=context_str,
+                history=history,
+                question=question,
+                intent=int(intent_code) if intent_code else 0,
+                rag_scores=rag_scores,
+                session_summary=session_summary,
+                user_profile=user_profile,
+                task_hint=task_hint,
             )
 
-            # ── Step 5: 发送 thinking 事件 + LLM 流式 ──
+            # 更新任务状态为 answering
+            if task_state and task_state.stage.value in ("gathering", "reasoning"):
+                try:
+                    update_task_state(conn, session_id, task_state.to_dict())
+                except Exception:
+                    pass
+
+            # ── Step 6: 发送 thinking 事件 + LLM 流式 ──
             yield f"data: {json.dumps({'type': 'thinking'}, ensure_ascii=False)}\n\n"
 
             stream = llm.chat.completions.create(
@@ -395,7 +535,54 @@ def chat_stream():
                 try:
                     add_message(conn, session_id, "assistant", full_answer)
                 except Exception:
-                    pass  # session 可能不存在
+                    pass
+            
+            # ── 智能上下文维护：摘要生成 & 用户画像更新 ──
+            try:
+                from assistant.context_manager import (
+                    generate_summary, extract_profile, estimate_messages_tokens
+                )
+                
+                # 重新获取完整历史（刚保存了最新消息）
+                full_history = fetch_messages(conn, session_id)
+                
+                # 1. 当消息足够多时，生成/更新会话摘要
+                if len(full_history) >= 8:
+                    try:
+                        existing_summary = get_session_summary(conn, session_id)
+                        new_summary = generate_summary(full_history, existing_summary)
+                        if new_summary and len(new_summary) > 10:
+                            update_session_summary(conn, session_id, new_summary)
+                            print(f"[ContextManager] 会话摘要已更新: {len(new_summary)} chars")
+                    except Exception as sum_err:
+                        print(f"[ContextManager] 摘要生成失败: {sum_err}")
+                
+                # 2. 提取/更新用户画像（从当前对话中）
+                username = _get_username()
+                if username and len(full_history) >= 4:
+                    try:
+                        new_profile = extract_profile(full_history)
+                        if new_profile:
+                            update_user_profile(conn, username, new_profile)
+                            print(f"[ContextManager] 用户画像已更新: {list(new_profile.keys())}")
+                    except Exception as prof_err:
+                        print(f"[ContextManager] 画像更新失败: {prof_err}")
+                
+                # 3. 日志：压缩前后对比
+                raw_tokens = estimate_messages_tokens(full_history)
+                if raw_tokens > 3500:
+                    print(f"[ContextManager] 历史消息 token 估算: {raw_tokens}，已触发压缩")
+            except Exception as cm_err:
+                print(f"[ContextManager] 维护失败: {cm_err}")
+
+            # 标记任务完成
+            if task_state:
+                from assistant.task_router import TaskStage
+                task_state.stage = TaskStage.DONE
+                try:
+                    update_task_state(conn, session_id, task_state.to_dict())
+                except Exception:
+                    pass
 
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
 
