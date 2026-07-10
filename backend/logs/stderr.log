@@ -1,11 +1,0 @@
-WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
- * Running on all addresses (0.0.0.0)
- * Running on http://127.0.0.1:5000
- * Running on http://10.10.9.194:5000
-Press CTRL+C to quit
-127.0.0.1 - - [10/Jul/2026 17:12:50] "POST /api/login HTTP/1.1" 200 -
-127.0.0.1 - - [10/Jul/2026 17:12:50] "POST /api/sessions HTTP/1.1" 200 -
-127.0.0.1 - - [10/Jul/2026 17:13:06] "POST /api/chat/stream HTTP/1.1" 200 -
-Loading weights:   0%|          | 0/391 [00:00<?, ?it/s]Loading weights: 100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 391/391 [00:00<00:00, 49471.28it/s]
-Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
-127.0.0.1 - - [10/Jul/2026 17:13:16] "POST /api/chat/stream HTTP/1.1" 200 -
