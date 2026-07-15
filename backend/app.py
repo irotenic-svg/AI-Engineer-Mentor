@@ -302,6 +302,8 @@ def chat_stream():
         return jsonify({"error": "问题不能为空"}), 400
 
     session_id = data.get("session_id", str(uuid.uuid4())[:8])
+    # 在 yield 之前捕获请求上下文中的值（Flask stream 中 yield 后可能丢失 request context）
+    username = _get_username()
 
     # 保存用户消息
     try:
@@ -330,16 +332,15 @@ def chat_stream():
             except Exception as te:
                 print(f"[TaskRouter] 加载状态失败: {te}")
                 task_state = None
-            
+
             # 加载会话摘要
             try:
                 session_summary = get_session_summary(conn, session_id)
             except Exception as se:
                 print(f"[ContextManager] 加载会话摘要失败: {se}")
-            
-            # 加载用户画像
+
+            # 加载用户画像（使用预先捕获的 username）
             try:
-                username = _get_username()
                 if username:
                     user_profile = get_user_profile(conn, username)
             except Exception as ue:
@@ -558,7 +559,6 @@ def chat_stream():
                         print(f"[ContextManager] 摘要生成失败: {sum_err}")
                 
                 # 2. 提取/更新用户画像（从当前对话中）
-                username = _get_username()
                 if username and len(full_history) >= 4:
                     try:
                         new_profile = extract_profile(full_history)
@@ -583,6 +583,29 @@ def chat_stream():
                     update_task_state(conn, session_id, task_state.to_dict())
                 except Exception:
                     pass
+
+            # ── Step 7: 生成后续问题推荐 ──
+            if full_answer:
+                try:
+                    from assistant.suggestions import SuggestionEngine
+
+                    engine = SuggestionEngine()
+                    task_type_str = (
+                        task_state.task_type.value
+                        if task_state else "direct_answer"
+                    )
+                    suggestions = engine.generate_from_answer(
+                        answer=full_answer,
+                        task_type=task_type_str,
+                        history=full_history,
+                        user_profile=user_profile,
+                        count=3,
+                    )
+                    if suggestions:
+                        yield f"data: {json.dumps({'type': 'suggestions', 'data': suggestions}, ensure_ascii=False)}\n\n"
+                        print(f"[Suggestions] 生成 {len(suggestions)} 条推荐追问")
+                except Exception as sug_err:
+                    print(f"[Suggestions] 生成失败: {sug_err}")
 
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
 
