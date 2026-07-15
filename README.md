@@ -56,7 +56,7 @@ AI-Engineer-Mentor/
 │   │   ├── embeddings.py            # BGE-M3 嵌入模型
 │   │   ├── vectorstore.py           # ChromaDB 向量存储管理器
 │   │   ├── prompts.py               # 系统提示词（意图感知 + 智能上下文压缩）
-│   │   ├── intents.py               # 意图识别（LLM function calling + 关键词 fallback，100% 准确率）
+│   │   ├── intents.py               # 意图识别（LLM function calling + 关键词 fallback，准确率提高）
 │   │   ├── websearch.py             # Tavily 网络搜索 + citation 清洗
 │   │   ├── context_manager.py       # 上下文压缩 + 会话摘要 + 用户画像提取
 │   │   ├── task_router.py           # 多轮任务路由（复杂度评估 + 槽位填充 + 状态机）
@@ -166,7 +166,7 @@ npm run dev
 
 - **三级分类**：RAG 课程检索 / 网络搜索 / 直接对话，LLM function calling 主路径 + 关键词 fallback 兜底
 - **多轮上下文感知**：意图分类时传入对话历史和上一轮意图，防止省略追问（如"Java的呢？"）被误判
-- **准确率**：100%（102 条标注测试集，`python scripts/eval_intents.py`）
+- **测试准确率**：100%（102 条标注测试集，`python scripts/eval_intents.py`）
 - **前端可视化**：消息气泡显示当前使用的工具标签（📚 课程资料 / 🌐 网络搜索）
 
 ### 网络搜索
